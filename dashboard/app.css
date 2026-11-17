@@ -25,7 +25,7 @@ body {
   line-height: 1.45;
 }
 .mono, .num, td.num, .fact b, .fig b { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
-.shell { max-width: 1160px; margin: 0 auto; padding: 0 28px 48px; }
+.shell { max-width: 1240px; margin: 0 auto; padding: 0 28px 48px; }
 a { color: var(--teal); }
 
 /* Masthead */
@@ -36,11 +36,21 @@ a { color: var(--teal); }
 .masthead .dateline { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--muted); }
 
 /* Today's call */
-.call { margin: 18px 0 0; padding: 16px 20px; border: 1px solid var(--rule-strong); background: var(--paper2); }
+.call { margin: 12px 0 0; padding: 10px 16px; border: 1px solid var(--rule-strong); background: var(--paper2); }
 .call .label { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--oxblood); }
-.call p { font-size: 19px; line-height: 1.4; margin: 6px 0 0; }
+.call p { font-size: 18px; line-height: 1.35; margin: 6px 0 0; }
 .call p b { font-weight: 700; }
-.call .note { font-size: 13px; color: var(--muted); margin-top: 8px; }
+.call .note { font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+/* Board strips: out-of-sample headline, top-3 by net, live self-check */
+.headline { margin: 10px 0 0; padding: 8px 14px; border: 1px solid var(--rule-strong); background: var(--paper2); }
+.headline .label { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--oxblood); }
+.headline p { font-size: 16px; line-height: 1.35; margin: 4px 0 0; }
+.topnet { margin: 6px 0 0; font-size: 13px; }
+.topnet .label { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.selfcheck { margin: 6px 0 0; padding: 6px 12px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; border: 1px solid var(--teal); background: var(--teal-bg); color: var(--teal); }
+.selfcheck.bad { border-color: var(--oxblood); background: var(--oxblood-bg); color: var(--oxblood); }
+.share-note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
 
 /* Facts strip */
 .facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin: 18px 0 0; border-top: 1px solid var(--rule-strong); border-bottom: 1px solid var(--rule-strong); }
@@ -71,7 +81,7 @@ a { color: var(--teal); }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 caption { text-align: left; padding: 10px 0; font-size: 13px; color: var(--muted); }
-th, td { padding: 9px 10px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--rule); }
+th, td { padding: 9px 8px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--rule); }
 th { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
 th button { font: inherit; color: inherit; background: none; border: none; padding: 0; cursor: pointer; text-transform: uppercase; letter-spacing: .1em; }
 td.num { text-align: right; white-space: nowrap; }
@@ -84,7 +94,7 @@ tbody tr:hover { background: #fbf8ef; }
 .pos { color: var(--teal); }
 .neg { color: var(--oxblood); }
 .implied { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
-.implied .bar { width: 90px; height: 6px; background: #e3dcc8; display: inline-block; }
+.implied .bar { width: 64px; height: 6px; background: #e3dcc8; display: inline-block; }
 .implied .bar i { display: block; height: 6px; background: var(--teal); }
 .chip {
   display: inline-block; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px;
@@ -93,6 +103,7 @@ tbody tr:hover { background: #fbf8ef; }
 .chip.agree { color: var(--teal); background: var(--teal-bg); }
 .chip.split { color: var(--oxblood); background: var(--oxblood-bg); }
 .chip.live { color: var(--gold); }
+.range .sub { display: block; font-size: 12px; color: var(--muted); }
 .status { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .empty { padding: 40px 20px; text-align: center; }
 .button { font: inherit; font-size: 14px; padding: 8px 16px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); cursor: pointer; }
@@ -133,6 +144,9 @@ tbody tr:hover { background: #fbf8ef; }
 .steps li { margin: 10px 0; font-size: 15px; }
 .steps .cost { display: block; font-size: 13px; color: var(--muted); }
 .check-line { font-size: 13px; color: var(--muted); margin-top: 10px; }
+/* Farm economics, one line, in the dossier: the row's net $/hr and $1K share
+   next to the consensus value, so the money is where the reader looks. */
+.econ-line { margin-top: 10px; padding: 8px 12px; border: 1px solid var(--rule-strong); background: var(--paper2); font-size: 14px; }
 .back { font: inherit; font-size: 13px; background: none; border: none; color: var(--teal); cursor: pointer; padding: 0; text-decoration: underline; }
 
 /* Model panel */

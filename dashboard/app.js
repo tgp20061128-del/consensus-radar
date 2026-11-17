@@ -29,6 +29,45 @@
     if (days >= 365) return (days / 365).toFixed(1) + 'y';
     return Math.max(0, Math.round(days)) + 'd';
   }
+  function fmtNet(n) {
+    if (n === null || n === undefined || !isFinite(n)) return 'n/a';
+    return (n < 0 ? '-$' : '+$') + Math.abs(n).toFixed(2);
+  }
+  function fmtShare(n) {
+    if (n === null || n === undefined || !isFinite(n)) return 'n/a';
+    return '$' + n.toFixed(2);
+  }
+
+  // Consensus value per $1,000 of TVL: how richly the models price each
+  // $1,000 locked in the protocol. A valuation density, not a payout.
+  function share1k(row) {
+    if (!row.tvl_usd) return null;
+    return (1000 * row.implied_value_usd) / row.tvl_usd;
+  }
+
+  // Each row's rank by each model alone: the two models rank the same board
+  // differently, and the gap between the two ranks is the row's rank interval.
+  var rankMapsCache = null;
+  function rankMaps() {
+    if (rankMapsCache) return rankMapsCache;
+    function ranks(key) {
+      var order = DATA.rows.slice().sort(function (a, b) {
+        if (b[key] !== a[key]) return b[key] - a[key];
+        return a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
+      });
+      var map = {};
+      order.forEach(function (r, i) { map[r.slug] = i + 1; });
+      return map;
+    }
+    rankMapsCache = { curve: ranks('curve_value_usd'), peers: ranks('peer_value_usd') };
+    return rankMapsCache;
+  }
+  function rankInterval(row) {
+    var maps = rankMaps();
+    var a = maps.curve[row.slug];
+    var b = maps.peers[row.slug];
+    return { lo: Math.min(a, b), hi: Math.max(a, b) };
+  }
 
   // The two models, as one function of the snapshot figures. The page uses
   // it for the detail view and the TVL simulator, and to check the board.
@@ -125,6 +164,7 @@
       else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
       else if (key === 'age') { av = a.age_days === null ? Infinity : a.age_days; bv = b.age_days === null ? Infinity : b.age_days; }
       else if (key === 'disagreement') { av = a.disagreement_log10; bv = b.disagreement_log10; }
+      else if (key === 'net') { av = a.net_usd_per_hour; bv = b.net_usd_per_hour; }
       else { av = a.implied_value_usd; bv = b.implied_value_usd; }
       if (av < bv) return -state.dir;
       if (av > bv) return state.dir;
@@ -172,6 +212,46 @@
     );
   }
 
+  // Out-of-sample, on the board: the consensus against the naive baseline,
+  // all three scored the same leave-one-out way on the same 92 teachers.
+  function looHeadline() {
+    var c = Math.pow(10, DATA.consensus_loo.median_log10_err).toFixed(2);
+    var n = Math.pow(10, DATA.naive_loo.median_log10_err).toFixed(2);
+    var p = Math.pow(10, DATA.peer_loo.median_log10_err).toFixed(2);
+    return el('section', { class: 'headline' },
+      el('div', { class: 'label', text: 'Out-of-sample' }),
+      el('p', null,
+        'The consensus lands half its predictions within ', el('b', { text: c + 'x' }),
+        ' of the actual cap — against ', el('b', { text: n + 'x' }),
+        ' for a single naive multiple and ', el('b', { text: p + 'x' }),
+        ' for the peers alone. Leave-one-out on ' + DATA.curve.n + ' live-token protocols; the same test for all three.'
+      )
+    );
+  }
+
+  function topNetStrip() {
+    var top = DATA.rows.slice().sort(function (a, b) { return b.net_usd_per_hour - a.net_usd_per_hour; }).slice(0, 3);
+    var line = top.map(function (r) { return '#' + r.rank + ' ' + r.name + ' ' + fmtNet(r.net_usd_per_hour) + '/hr'; }).join('  ·  ');
+    return el('p', { class: 'topnet' }, el('span', { class: 'label', text: 'Top 3 by net $/hr — ' }), line);
+  }
+
+  // The board checks itself: recompute five rows live — top, middle, bottom —
+  // and say so in green when every number matches board.json.
+  function selfCheckStrip() {
+    var picks = [0, 44, 89, 134, 177].map(function (i) { return DATA.rows[i]; }).filter(Boolean);
+    var bad = [];
+    picks.forEach(function (row) {
+      var s = scoreRow(row, 1);
+      if (s.curve !== row.curve_value_usd || s.peer !== row.peer_value_usd || s.consensus !== row.implied_value_usd) bad.push(row.slug);
+    });
+    var ok = bad.length === 0;
+    return el('p', { class: 'selfcheck' + (ok ? '' : ' bad'), text:
+      ok
+        ? '✓ board.json = this page — recomputed ' + picks.length + ' rows live (curve, peers, consensus), all match.'
+        : '✗ self-check failed on ' + bad.join(', ') + ' — the data on this page does not match board.json.'
+    });
+  }
+
   function controls() {
     var categories = Array.from(new Set(DATA.rows.map(function (r) { return r.category || 'Other'; }))).sort();
     var search = el('input', { type: 'search', id: 'q', placeholder: 'Search name, category or chain', value: state.q, 'aria-label': 'Search the board' });
@@ -202,7 +282,7 @@
   }
 
   function sortHeader(key, label) {
-    return el('th', { scope: 'col', class: key === 'implied' || key === 'tvl' || key === 'growth' || key === 'age' ? 'num' : '' },
+    return el('th', { scope: 'col', class: key === 'implied' || key === 'tvl' || key === 'growth' || key === 'age' || key === 'net' ? 'num' : '' },
       el('button', { type: 'button', onclick: function () { if (state.sort === key) state.dir = -state.dir; else { state.sort = key; state.dir = -1; } writeHash(); render(); } },
         label,
         state.sort === key ? el('span', { 'aria-hidden': 'true', text: state.dir < 0 ? ' v' : ' ^' }) : null
@@ -225,6 +305,8 @@
     list.forEach(function (r) {
       var growth = r.change_7d === null ? 'n/a' : fmtPct(r.change_7d);
       var growthClass = r.change_7d === null ? '' : r.change_7d >= 0 ? 'pos' : 'neg';
+      var iv = rankInterval(r);
+      var intervalText = iv.lo === iv.hi ? 'rank ' + iv.lo + ' both' : 'ranks ' + iv.lo + '–' + iv.hi;
       var tr = el('tr', {
         'data-selected': state.selected === r.slug ? 'true' : 'false',
         tabindex: '0',
@@ -243,26 +325,38 @@
           el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
           el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
         )),
+        el('td', { class: 'num', text: fmtShare(share1k(r)) }),
+        el('td', { class: 'num ' + (r.net_usd_per_hour >= 0 ? 'pos' : 'neg'), text: fmtNet(r.net_usd_per_hour) }),
+        el('td', { class: 'num' }, el('div', { class: 'range' },
+          el('span', { class: 'mono', text: fmtUsd(Math.min(r.curve_value_usd, r.peer_value_usd)) + '–' + fmtUsd(Math.max(r.curve_value_usd, r.peer_value_usd)) }),
+          el('span', { class: 'sub', text: intervalText })
+        )),
         el('td', null, el('span', { class: 'chip ' + r.verdict, text: r.verdict === 'split' ? 'SPLIT' : 'AGREE' }))
       );
       tbody.appendChild(tr);
     });
-    return el('div', { class: 'panel' },
-      el('div', { class: 'table-wrap' },
-        el('table', null,
-          el('caption', { text: 'Consensus board: pre-token protocols, strongest consensus first. Select a row for its dossier.' }),
-          el('thead', null, el('tr', null,
-            sortHeader('consensus', 'Rank'),
-            sortHeader('name', 'Protocol'),
-            sortHeader('tvl', 'TVL'),
-            sortHeader('growth', '7d'),
-            sortHeader('age', 'Age'),
-            sortHeader('consensus', 'Consensus value'),
-            el('th', { scope: 'col', text: 'Verdict' })
-          )),
-          tbody
+    return el('div', null,
+      el('div', { class: 'panel' },
+        el('div', { class: 'table-wrap' },
+          el('table', null,
+            el('caption', { text: 'Consensus board: pre-token protocols, strongest consensus first. Select a row for its dossier.' }),
+            el('thead', null, el('tr', null,
+              sortHeader('consensus', 'Rank'),
+              sortHeader('name', 'Protocol'),
+              sortHeader('tvl', 'TVL'),
+              sortHeader('growth', '7d'),
+              sortHeader('age', 'Age'),
+              sortHeader('consensus', 'Consensus value'),
+              el('th', { scope: 'col', class: 'num', text: '$1K share' }),
+              sortHeader('net', 'Net $/hr'),
+              el('th', { scope: 'col', class: 'num', text: 'Model range' }),
+              el('th', { scope: 'col', text: 'Verdict' })
+            )),
+            tbody
+          )
         )
-      )
+      ),
+      el('p', { class: 'share-note', text: '$1K share is the consensus value attributable to each $1,000 of the protocol\u2019s TVL (1000 x consensus value / TVL). It is a valuation density — how richly the models price each dollar locked — not a payout and not a promised return.' })
     );
   }
 
@@ -382,6 +476,11 @@
           el('div', null, el('span', { text: 'Consensus value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
         ),
         el('p', { class: 'check-line', text: 'The page recomputes this row as ' + fmtUsd(recomputed.consensus) + (recomputed.consensus === row.implied_value_usd ? ', the same number the board carries.' : ', which differs from the board: the data would be stale.') + ' Consensus is a ' + consensusLabel() + ', so one model cannot drag the other.' }),
+        el('p', { class: 'econ-line' },
+          'Farm economics: net ', el('b', { class: 'mono', text: fmtNet(row.net_usd_per_hour) + '/hr' }),
+          ' · $1K share ', el('b', { class: 'mono', text: fmtShare(share1k(row)) }),
+          ' — the value the position represents per hour of farming, not a promised return.'
+        ),
         el('h3', { text: 'TVL path' }),
         tvlHistorySvg(row),
         el('h3', { text: 'What if TVL moves?' }),
@@ -396,17 +495,27 @@
           var action = at >= 0 ? s.slice(0, at) : s;
           var tail = at >= 0 ? s.slice(at + 1) : '';
           return el('li', null, el('b', { text: action }), el('span', { class: 'cost', text: tail }));
-        }))
+        })),
+        el('p', { class: 'check-line', text: 'Farm economics, from this plan\u2019s own costs and times: $' + row.farm_gas_usd + ' of gas over ' + row.farm_active_hours + ' active hours; the $' + row.farm_capital_usd + ' position represents $' + row.farm_value_share_usd.toFixed(2) + ' of consensus value, so net ' + fmtNet(row.net_usd_per_hour) + '/hr. That is the value the position represents per hour of your time, not a promised return — no step of this plan promises one.' })
       )
     );
     return panel;
+  }
+
+  // Net $/hr at a simulated TVL: the same farm arithmetic as the board's
+  // column, with the simulated consensus value and simulated TVL in place
+  // of the row's own numbers. The plan's capital and gas do not move.
+  function netAtSim(row, consensus, tvl) {
+    if (!row.farm_active_hours) return null;
+    return (row.farm_capital_usd * consensus / tvl - row.farm_gas_usd) / row.farm_active_hours;
   }
 
   function updateSim(row) {
     var out = document.getElementById('sim-out');
     if (!out) return;
     var s = scoreRow(row, state.simK);
-    out.textContent = 'TVL x' + state.simK.toFixed(2) + ' = ' + fmtUsd(row.tvl_usd * state.simK) + '  ·  curve ' + fmtUsd(s.curve) + '  ·  peers ' + fmtUsd(s.peer) + '  ·  consensus ' + fmtUsd(s.consensus);
+    var netSim = netAtSim(row, s.consensus, row.tvl_usd * state.simK);
+    out.textContent = 'TVL x' + state.simK.toFixed(2) + ' = ' + fmtUsd(row.tvl_usd * state.simK) + '  ·  curve ' + fmtUsd(s.curve) + '  ·  peers ' + fmtUsd(s.peer) + '  ·  consensus ' + fmtUsd(s.consensus) + (netSim === null ? '' : '  ·  net ' + fmtNet(netSim) + '/hr');
   }
 
   function modelPanel() {
@@ -423,7 +532,8 @@
         'SPLIT when |log10(implied_A / implied_B)| >= 0.5 (about 3.2x apart)'
       ),
       el('p', { text: 'Model A is fitted at run time from ' + c.n + ' live-token protocols. It explains R2 = ' + c.r2 + ' of market-cap variance; leave-one-out, half its predictions land within ' + Math.pow(10, c.loo_median_log10_err).toFixed(1) + 'x of the actual cap, ' + Math.round(c.loo_within_2x * 100) + '% within 2x and ' + Math.round(c.loo_within_3x * 100) + '% within 3x. A curve that weak is a reason for a second model, not a reason to trust the first one more.' }),
-      el('p', { text: 'The blend is ' + Math.round(DATA.model.consensus_curve_weight * 100) + '% curve and ' + Math.round((1 - DATA.model.consensus_curve_weight) * 100) + '% peers because leave-one-out says the curve is the stronger predictor: the blend lands half its predictions within ' + Math.pow(10, DATA.consensus_loo.median_log10_err).toFixed(1) + 'x of the actual cap and ' + Math.round(DATA.consensus_loo.within_3x * 100) + '% within 3x, against ' + Math.pow(10, DATA.blend50_loo.median_log10_err).toFixed(1) + 'x and ' + Math.round(DATA.blend50_loo.within_3x * 100) + '% for the even blend and ' + Math.pow(10, DATA.peer_loo.median_log10_err).toFixed(1) + 'x and ' + Math.round(DATA.peer_loo.within_3x * 100) + '% for the peers alone.' }),
+      el('p', { text: 'The blend is ' + Math.round(DATA.model.consensus_curve_weight * 100) + '% curve and ' + Math.round((1 - DATA.model.consensus_curve_weight) * 100) + '% peers because leave-one-out says the curve is the stronger predictor: the blend lands half its predictions within ' + Math.pow(10, DATA.consensus_loo.median_log10_err).toFixed(1) + 'x of the actual cap and ' + Math.round(DATA.consensus_loo.within_3x * 100) + '% within 3x, against ' + Math.pow(10, DATA.blend50_loo.median_log10_err).toFixed(1) + 'x and ' + Math.round(DATA.blend50_loo.within_3x * 100) + '% for the even blend and ' + Math.pow(10, DATA.peer_loo.median_log10_err).toFixed(1) + 'x and ' + Math.round(DATA.peer_loo.within_3x * 100) + '% for the peers alone. A single naive multiple — one median market-cap-per-TVL for every protocol, scored the same leave-one-out way — lands half its predictions within ' + Math.pow(10, DATA.naive_loo.median_log10_err).toFixed(2) + 'x.' }),
+      el('p', { text: 'Net $/hr, per row, is the farm plan\u2019s own arithmetic: the plan\u2019s deposit represents deposit x consensus / TVL of consensus value; minus the plan\u2019s own gas, from the costs its steps state; divided by the active hours its steps state. The hold itself is passive and counts no hours. A negative number means the gas costs more than the value the position represents — most rows are negative, and the board shows that instead of hiding it. It is the value an hour of farming represents, not a promised return.' }),
       el('p', { class: 'peers', text: 'Peer multiples by category (median market-cap-per-TVL, three or more live peers): ' + peerLines + '. Global fallback: ' + DATA.global_peer_multiple + '.' }),
       el('p', { class: 'honest', text: 'Honesty note: the snapshot records no token for these protocols; it does not prove they have none, and it does not predict whether or when any of them issues one. Implied value is this entry\u2019s own claim, never make.fun\u2019s. The early radar is every pre-token protocol below the watchlist floor, by TVL; the live-token protocols are set aside with their market caps shown.' })
     );
@@ -449,6 +559,9 @@
     var shell = el('div', { class: 'shell' });
     shell.appendChild(masthead());
     shell.appendChild(todaysCall());
+    shell.appendChild(looHeadline());
+    shell.appendChild(topNetStrip());
+    shell.appendChild(selfCheckStrip());
     shell.appendChild(facts());
     shell.appendChild(controls());
     var selected = state.selected ? rowBySlug(state.selected) : null;

@@ -26,6 +26,14 @@
 // Both models share two adjustments, both from the snapshot's own figures:
 // growth (the 7-day TVL change, clamped) and maturity (how long the protocol
 // has run with no token on record). Nothing here names a protocol.
+//
+// Two derived readouts travel with the board but change no valuation: a
+// naive single-multiple leave-one-out (one median market-cap-per-TVL for
+// every protocol, scored the same way as the models), and each row's farm
+// economics — the plan's own gas and active hours set against the consensus
+// value the position represents. Both are computed from the snapshot's own
+// figures; neither feeds back into any ranking, and board.json carries
+// neither.
 
 /** One protocol of the sealed snapshot: exactly its ten fields. */
 export interface SnapshotProtocol {
@@ -109,11 +117,22 @@ export interface PeerMultiple {
   fallback: boolean;
 }
 
-/** A farm step: the action, what it costs, and how long it takes. */
+/** A farm step: the action, what it costs, and how long it takes.
+ * The cost/time strings are what the board prints; the numbers beside them
+ * are the same figures as machine values, so the plan's economics can be
+ * computed from the plan itself instead of parsed out of English. `cost_usd`
+ * is out-of-pocket gas for the step as written ("under $3" counts as $3,
+ * the stated bound); the deposit itself is never a cost — it stays in the
+ * position. `minutes` is active time; the hold step is passive and counts 0.
+ * Weekly figures apply once per week of the hold, weeks = ceil(hold / 7). */
 export interface FarmStep {
   text: string;
   cost: string;
   time: string;
+  cost_usd: number;
+  weekly_cost_usd: number;
+  minutes: number;
+  weekly_minutes: number;
 }
 
 /** One row of board.json. */
@@ -173,6 +192,16 @@ export interface RadarRow {
   verdict: 'agree' | 'split';
   watchlist: boolean;
   farm_steps: string[];
+  /** Net $/hr of the farm plan, from the plan's own costs and times (see farmEconomics). */
+  net_usd_per_hour: number;
+  /** Out-of-pocket gas for the whole farm plan, in USD. */
+  farm_gas_usd: number;
+  /** Active hours the farm plan asks of the farmer. */
+  farm_active_hours: number;
+  /** The consensus value the plan's position represents, in USD. */
+  farm_value_share_usd: number;
+  /** The deposit the farm plan sizes, in USD. */
+  farm_capital_usd: number;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value. */
@@ -200,6 +229,8 @@ export interface RadarData {
   consensus_loo: LooMetrics;
   blend50_loo: LooMetrics;
   peer_loo: LooMetrics;
+  /** Leave-one-out of the naive baseline: one multiple for every protocol. */
+  naive_loo: LooMetrics;
   watchlist_size: number;
   board_size: number;
   early_size: number;
@@ -419,6 +450,23 @@ export function consensusLoo(
     blend50: looMetrics(blend(0.5), actual),
     peers: looMetrics(peers, actual),
   };
+}
+
+/**
+ * The naive baseline, scored the same leave-one-out way as the models: one
+ * median market-cap-per-TVL for every protocol, recomputed without the point
+ * being scored. No category, no curve, no adjustments — the number the
+ * consensus has to beat to be worth anything.
+ */
+export function naiveLoo(live: SnapshotProtocol[]): LooMetrics {
+  const ratios = live.map((p) => p.mcap_usd! / p.tvl_usd);
+  const predicted: number[] = [];
+  const actual: number[] = [];
+  for (let i = 0; i < live.length; i++) {
+    predicted.push(Math.log10(live[i]!.tvl_usd * median(ratios.filter((_, j) => j !== i))));
+    actual.push(Math.log10(live[i]!.mcap_usd!));
+  }
+  return looMetrics(predicted, actual);
 }
 
 /** The peer multiple per category, and the global fallback. */
@@ -652,34 +700,109 @@ export function farmSteps(p: SnapshotProtocol, age: number | null, disagreement:
       text: `Start a fresh wallet that holds only the funds you plan to farm, and write its seed phrase on paper, never in a screenshot.`,
       cost: 'under $3 of gas for the first transaction',
       time: '5 minutes',
+      cost_usd: 3,
+      weekly_cost_usd: 0,
+      minutes: 5,
+      weekly_minutes: 0,
     },
     {
       text: `${actionFor(p, capital, chain)} ${depth}`,
       cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`,
       time: '15 minutes to set up',
+      cost_usd: capital >= 150 ? 8 : 4,
+      weekly_cost_usd: 0,
+      minutes: 15,
+      weekly_minutes: 0,
     },
     {
       text: `Do one qualifying action each week, such as a deposit, a borrow, a swap or a vote, so the wallet shows steady use. ${momentum}`,
       cost: 'about $2 of gas a week',
       time: '10 minutes a week',
+      cost_usd: 0,
+      weekly_cost_usd: 2,
+      minutes: 0,
+      weekly_minutes: 10,
     },
     {
       text: `Hold the position for at least ${hold} days so the activity spans more than one snapshot. ${holdNote}`,
       cost: `the $${capital} stays in the position`,
       time: `${hold} days`,
+      cost_usd: 0,
+      weekly_cost_usd: 0,
+      minutes: 0,
+      weekly_minutes: 0,
     },
-    { text: verdictStep, cost: 'nothing to read', time: '10 minutes' },
+    { text: verdictStep, cost: 'nothing to read', time: '10 minutes', cost_usd: 0, weekly_cost_usd: 0, minutes: 10, weekly_minutes: 0 },
     {
       text: `Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes, then log the wallet, the dates and every transaction.`,
       cost: 'no fee to check, and never pay to claim',
       time: '10 minutes',
+      cost_usd: 0,
+      weekly_cost_usd: 0,
+      minutes: 10,
+      weekly_minutes: 0,
     },
     {
       text: `Re-open this radar once a week and compare the two models again: if the verdict flips from SPLIT to AGREE the consensus is firmer, and if TVL falls two weeks in a row pause new deposits.`,
       cost: 'nothing to re-check',
       time: '10 minutes a week',
+      cost_usd: 0,
+      weekly_cost_usd: 0,
+      minutes: 0,
+      weekly_minutes: 10,
     },
   ];
+}
+
+/** A farm plan's economics, derived only from the plan's own stated costs
+ * and times and the row's own consensus value. Nothing here is a promised
+ * return: the plan promises no return, so the "gain" side is the consensus
+ * value the position represents, not money the farmer is told they will make. */
+export interface FarmEconomics {
+  /** The deposit the plan sizes, by TVL tier ($50/$100/$150/$250). */
+  capital_usd: number;
+  /** Out-of-pocket gas for the whole plan: one-off steps plus $2 a week. */
+  gas_usd: number;
+  /** Active hours the plan asks of the farmer; the hold itself is passive. */
+  active_hours: number;
+  /** The position's pro-rata share of the consensus value: capital x consensus / TVL. */
+  value_share_usd: number;
+  /** (value share - gas) / active hours: the consensus value an hour of
+   * farming represents, net of gas. Negative when the gas costs more than
+   * the value the position represents — most rows are negative, and the
+   * board shows that instead of hiding it. */
+  net_usd_per_hour: number;
+}
+
+/**
+ * Net $/hr for one farm plan, from the plan's own numbers only:
+ *
+ *   weeks        = ceil(hold_days / 7)          (each started week needs its qualifying action)
+ *   gas_usd      = sum(step.cost_usd + step.weekly_cost_usd x weeks)
+ *   active_hours = sum(step.minutes + step.weekly_minutes x weeks) / 60
+ *   value_share  = capital_usd x implied_value_usd / tvl_usd
+ *   net $/hr     = (value_share - gas_usd) / active_hours
+ *
+ * The deposit is not subtracted twice: it stays in the position, so it is
+ * neither a cost nor a gain — only the gas leaves the wallet. The hold days
+ * contribute no hours because holding is passive. Everything is rounded to
+ * cents, and the rate is computed from the rounded hours and share, so the
+ * printed figures recompute exactly.
+ */
+export function farmEconomics(
+  steps: FarmStep[],
+  capital: number,
+  holdDays: number,
+  impliedValueUsd: number,
+  tvlUsd: number,
+): FarmEconomics {
+  const weeks = Math.ceil(holdDays / 7);
+  const gas = steps.reduce((n, s) => n + s.cost_usd + s.weekly_cost_usd * weeks, 0);
+  const minutes = steps.reduce((n, s) => n + s.minutes + s.weekly_minutes * weeks, 0);
+  const activeHours = Math.round((minutes / 60) * 100) / 100;
+  const valueShare = Math.round(((capital * impliedValueUsd) / tvlUsd) * 100) / 100;
+  const net = Math.round(((valueShare - gas) / activeHours) * 100) / 100;
+  return { capital_usd: capital, gas_usd: gas, active_hours: activeHours, value_share_usd: valueShare, net_usd_per_hour: net };
 }
 
 /** The live-token protocols, by market cap, for the dashboard's Live token view. */
@@ -699,8 +822,10 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
     }));
 }
 
-/** A board row's compact form for data.js. */
-export function radarRow(row: BoardRow, watchlist: boolean): RadarRow {
+/** A board row's compact form for data.js. The farm economics ride along:
+ * they are derived from the row's own farm plan and consensus value, and
+ * they never feed back into the board — board.json carries none of them. */
+export function radarRow(row: BoardRow, watchlist: boolean, econ: FarmEconomics): RadarRow {
   return {
     rank: row.rank,
     slug: row.slug,
@@ -724,6 +849,11 @@ export function radarRow(row: BoardRow, watchlist: boolean): RadarRow {
     verdict: row.model.verdict,
     watchlist,
     farm_steps: row.farm_steps,
+    net_usd_per_hour: econ.net_usd_per_hour,
+    farm_gas_usd: econ.gas_usd,
+    farm_active_hours: econ.active_hours,
+    farm_value_share_usd: econ.value_share_usd,
+    farm_capital_usd: econ.capital_usd,
   };
 }
 
@@ -733,12 +863,24 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const curve = fitCurve(live);
   const { byCategory: peers, global: globalPeer } = peerMultiples(live, model.peer_min_count);
   const loo = consensusLoo(live, snapshot.as_of, model);
+  const naive = naiveLoo(live);
   const board = buildBoard(snapshot, model);
   const liveList = liveRows(snapshot);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
   const peerList = [...peers.values()]
     .filter((pm) => !pm.fallback)
     .sort((a, b) => b.peer_count - a.peer_count || (a.category < b.category ? -1 : 1));
+  // The farm economics are recomputed here from the same structured steps
+  // buildBoard already flattened into strings: same inputs, same steps, so
+  // the economics and the printed plan can never disagree — and board.json
+  // itself is untouched, since BoardRow carries no economics fields.
+  const protocolsBySlug = bySlug(snapshot.protocols);
+  const rows = board.map((r) => {
+    const p = protocolsBySlug.get(r.slug)!;
+    const steps = farmSteps(p, r.age_days, r.model.disagreement_log10, r.model.curve_value_usd, r.model.peer_value_usd);
+    const econ = farmEconomics(steps, capitalFor(p), holdDaysFor(r.age_days), r.implied_value_usd, r.tvl_usd);
+    return radarRow(r, snapshot.watchlist.includes(r.slug), econ);
+  });
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -751,12 +893,13 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     consensus_loo: loo.consensus,
     blend50_loo: loo.blend50,
     peer_loo: loo.peers,
+    naive_loo: naive,
     watchlist_size: snapshot.watchlist.length,
     board_size: board.length,
     early_size: early,
     live_size: liveList.length,
     split_count: board.filter((r) => r.model.verdict === 'split').length,
-    rows: board.map((r) => radarRow(r, snapshot.watchlist.includes(r.slug))),
+    rows,
     live: liveList,
   };
   return { board, radar, curve };
